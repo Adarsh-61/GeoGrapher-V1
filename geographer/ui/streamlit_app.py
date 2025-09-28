@@ -2,41 +2,69 @@
 
 from __future__ import annotations
 
+# --- Path bootstrap so 'geographer' package can be imported even when this file
+#     is executed as the main entrypoint from within geographer/ui -------------
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+# --- Standard library imports -------------------------------------------------
 import json
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Tuple
 
+# --- Third-party --------------------------------------------------------------
 import streamlit as st
 
-from geographer.core import (
-    FunctionAnalyzer,
-    Point,
-    angle_between_lines,
-    circle_circle_intersection,
-    distance,
-    distance_from_point,
-    ellipse_standard,
-    eigen_analysis,
-    foot_of_perpendicular,
-    hyperbola_standard,
-    intersection,
-    line_circle_intersection,
-    line_conic_intersection,
-    line_from_points,
-    matrix_transform,
-    midpoint,
-    parabola_x2_4ay,
-    parabola_y2_4ax,
-    plot_basic_trig,
-    radical_axis,
-    section_point,
-    tangents_from_external_point,
-    transform_trig,
-)
-from geographer.core.lines import Line
-from geographer.core.matrices import matrix_addition, matrix_determinant, matrix_inverse, matrix_multiplication
-from geographer.core.triangles import TriangleMetrics
-from geographer.viz import build_figure, export_json
+# --- GeoGrapher package imports (with diagnostic on failure) ------------------
+try:
+    from geographer.core import (
+        FunctionAnalyzer,
+        Point,
+        angle_between_lines,
+        circle_circle_intersection,
+        distance,
+        distance_from_point,
+        ellipse_standard,
+        eigen_analysis,
+        foot_of_perpendicular,
+        hyperbola_standard,
+        intersection,
+        line_circle_intersection,
+        line_conic_intersection,
+        line_from_points,
+        matrix_transform,
+        midpoint,
+        parabola_x2_4ay,
+        parabola_y2_4ax,
+        plot_basic_trig,
+        radical_axis,
+        section_point,
+        tangents_from_external_point,
+        transform_trig,
+    )
+    from geographer.core.lines import Line
+    from geographer.core.matrices import (
+        matrix_addition,
+        matrix_determinant,
+        matrix_inverse,
+        matrix_multiplication,
+    )
+    from geographer.core.triangles import TriangleMetrics
+    from geographer.viz import build_figure, export_json
+except ModuleNotFoundError as e:  # pragma: no cover
+    st.error(
+        "Failed to import the 'geographer' package. "
+        "If you are running this via a hosting platform, ensure the project root "
+        "is on Python's path or install the package with an editable install (-e .). "
+        f"Original error: {e}"
+    )
+    raise
+
+# --- Data structures ----------------------------------------------------------
 
 
 @dataclass
@@ -47,6 +75,7 @@ class Operation:
     description: str
 
 
+# --- Operations registry ------------------------------------------------------
 _OPERATIONS: Dict[str, Operation] = {
     "distance": Operation(
         label="Distance between two points",
@@ -95,9 +124,7 @@ _OPERATIONS: Dict[str, Operation] = {
     ),
     "circle_line": Operation(
         label="Line and circle intersection",
-        handler=lambda args: line_circle_intersection(
-            args["circle"], args["line"]
-        ),
+        handler=lambda args: line_circle_intersection(args["circle"], args["line"]),
         category="Coordinate Geometry",
         description="Intersection of a circle with a line",
     ),
@@ -200,7 +227,10 @@ _OPERATIONS: Dict[str, Operation] = {
     ),
     "function_plot": Operation(
         label="Plot function",
-        handler=lambda args: FunctionAnalyzer(args["expr"]).plot(tuple(args["domain"]), show_derivative=args.get("show_derivative", False)),
+        handler=lambda args: FunctionAnalyzer(args["expr"]).plot(
+            tuple(args["domain"]),
+            show_derivative=args.get("show_derivative", False),
+        ),
         category="Calculus",
         description="Plot function with optional derivative",
     ),
@@ -219,11 +249,15 @@ _OPERATIONS: Dict[str, Operation] = {
 }
 
 
+# --- Helpers ------------------------------------------------------------------
 def _category_options() -> Dict[str, List[str]]:
     mapping: Dict[str, List[str]] = {}
     for op_key, op in _OPERATIONS.items():
         mapping.setdefault(op.category, []).append(op_key)
-    return mapping
+    # Keep operations ordered by label inside each category
+    for cat, keys in mapping.items():
+        mapping[cat] = sorted(keys, key=lambda k: _OPERATIONS[k].label.lower())
+    return dict(sorted(mapping.items(), key=lambda kv: kv[0].lower()))
 
 
 def _point_inputs(prefix: str, container) -> Tuple[float, float]:
@@ -241,7 +275,13 @@ def _matrix_input(label: str, container, size: Tuple[int, int] = (2, 2)) -> List
         row_vals: List[float] = []
         cols_container = container.columns(cols)
         for c in range(cols):
-            row_vals.append(cols_container[c].number_input(f"{label}[{r+1},{c+1}]", value=1.0 if r == c else 0.0, key=f"{label}_{r}_{c}") )
+            row_vals.append(
+                cols_container[c].number_input(
+                    f"{label}[{r+1},{c+1}]",
+                    value=1.0 if r == c else 0.0,
+                    key=f"{label}_{r}_{c}",
+                )
+            )
         matrix.append(row_vals)
     return matrix
 
@@ -250,10 +290,24 @@ def _circle_input(label: str, container):
     container.markdown(f"**{label}**")
     center = _point_inputs(f"{label}_center", container)
     radius = container.number_input(f"{label} radius", value=1.0, min_value=0.0, key=f"{label}_radius")
-    from geographer.core.circles import Circle
+    from geographer.core.circles import Circle  # local import to avoid circulars
     return Circle(Point(*center, label=f"{label[0]}"), radius)
 
 
+def _safe_latex(expr: str) -> str:
+    """
+    Basic safety wrapper for LaTeX display lines (already provided by result.steps).
+    Prevents accidental double-$ enclosure or empty strings.
+    """
+    e = expr.strip()
+    if not e:
+        return ""
+    if (e.startswith("$") and e.endswith("$")) or (e.startswith("\\(") and e.endswith("\\)")):
+        return e
+    return f"${e}$"
+
+
+# --- Main app -----------------------------------------------------------------
 def main() -> None:
     st.set_page_config(page_title="GeoGrapher", layout="wide")
     st.title("GeoGrapher — Interactive Coordinate Geometry & Math Visualizer")
@@ -266,7 +320,9 @@ def main() -> None:
     sidebar.header("Controls")
     category = sidebar.selectbox("Mode", list(categories.keys()))
     operation_key = sidebar.selectbox(
-        "Operation", categories[category], format_func=lambda key: _OPERATIONS[key].label
+        "Operation",
+        categories[category],
+        format_func=lambda key: _OPERATIONS[key].label,
     )
     operation = _OPERATIONS[operation_key]
     sidebar.write(operation.description)
@@ -319,7 +375,7 @@ def main() -> None:
             elif operation_key == "tangent_external":
                 args["circle"] = _circle_input("Circle", input_container)
                 args["P"] = _point_inputs("External point", input_container)
-            else:
+            else:  # radical_axis
                 args["circle1"] = _circle_input("Circle 1", input_container)
                 args["circle2"] = _circle_input("Circle 2", input_container)
         elif operation_key.startswith("matrix_") or operation_key == "eigen_analysis":
@@ -371,14 +427,18 @@ def main() -> None:
             result = operation.handler(args)
         except Exception as exc:  # pragma: no cover
             st.error(f"Operation failed: {exc}")
-            return
+            st.stop()
 
-        st.session_state.history.insert(0, {
-            "operation": operation.label,
-            "payload": result.payload,
-        })
+        # Expecting result to have .payload / .plot_elements / .steps / .warnings
+        st.session_state.history.insert(
+            0,
+            {
+                "operation": operation.label,
+                "payload": getattr(result, "payload", None),
+            },
+        )
 
-        figure = build_figure(result.plot_elements) if result.plot_elements else None
+        figure = build_figure(result.plot_elements) if getattr(result, "plot_elements", None) else None
         with placeholder_fig:
             st.subheader("Interactive Plot")
             if figure:
@@ -388,13 +448,17 @@ def main() -> None:
 
         with placeholder_steps:
             st.subheader("Steps")
-            for step in result.steps:
-                st.markdown(f"- ${step}$")
+            for step in getattr(result, "steps", []):
+                safe = _safe_latex(step)
+                if safe:
+                    st.markdown(f"- {safe}")
+                else:
+                    st.markdown("- (empty)")
 
         with placeholder_summary:
             st.subheader("Result")
-            st.json(result.payload)
-            if result.warnings:
+            st.json(getattr(result, "payload", {}))
+            if getattr(result, "warnings", None):
                 st.warning("\n".join(result.warnings))
 
         export_col1, export_col2 = st.columns(2)
@@ -405,12 +469,12 @@ def main() -> None:
         with export_col2:
             st.download_button(
                 "Copy LaTeX steps",
-                data="\n".join(result.steps),
+                data="\n".join(getattr(result, "steps", [])),
                 file_name="steps.tex",
             )
 
     st.markdown("---")
-    st.subheader("History")
+    st.subheader("History (recent 5)")
     for entry in st.session_state.history[:5]:
         with st.expander(entry["operation"]):
             st.json(entry["payload"])
